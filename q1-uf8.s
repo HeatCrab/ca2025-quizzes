@@ -1,8 +1,3 @@
-# =====================================================
-# UF8 Implementation in RISC-V Assembly
-# Version 1: Complete Implementation
-# =====================================================
-
 .data
     # Test messages
     msg_all_pass:     .string "All tests passed!\n"
