@@ -127,105 +127,82 @@ test_done:
 # Encode uint32_t to uf8
 # Input: a0 = 32-bit value
 # Output: a0 = uf8 value (8-bit)
-# Registers used: a0-a1, t0-t6, s0-s3 (needs stack)
+# Registers used: a0, t0-t3, s0-s2, ra (needs stack)
 # =====================================================
 uf8_encode:
-    # Save registers
-    addi sp, sp, -24
-    sw ra, 20(sp)
-    sw s0, 16(sp)
-    sw s1, 12(sp)
-    sw s2, 8(sp)
-    sw s3, 4(sp)
-    sw s4, 0(sp)
+    addi sp, sp, -16
+    sw ra, 12(sp)
+    sw s0, 8(sp)
+    sw s1, 4(sp)
+    sw s2, 0(sp)
     
-    mv s0, a0          # s0 = value (input)
+    mv s0, a0          # s0 = value
     
-    # Special case: value < 16, return value directly
+    # Special case: value < 16, return directly
     li t0, 16
-    bge s0, t0, encode_normal
-    mv a0, s0
-    j encode_done
+    blt s0, t0, encode_direct_return
     
-encode_normal:
-    mv a0, s0
+    # Get initial exponent estimate using CLZ on (value >> 4)
+    srli a0, s0, 4
     call clz
-    mv t0, a0          # t0 = lz (leading zeros)
     li t1, 31
-    sub t1, t1, t0     # t1 = msb
+    sub s1, t1, a0     # s1 = exponent = 31 - clz(value >> 4)
     
-    # Initialize exponent = 0, overflow = 0
-    li s1, 0           # s1 = exponent
-    li s2, 0           # s2 = overflow
+    # Calculate offset = ((1 << exponent) - 1) << 4
+    li t1, 1
+    sll t1, t1, s1     
+    addi t1, t1, -1    
+    slli s2, t1, 4     
     
-    # if (msb >= 5)
-    li t2, 5
-    blt t1, t2, find_exp_loop    
-    addi s1, t1, -4    # exponent = msb - 4
+fine_tune_down:
+    # Check if value < offset (exponent too high)
+    bge s0, s2, fine_tune_up
+    beqz s1, calc_mantissa     # Can't go lower than 0
     
-    # if (exponent > 15) exponent = 15
-    li t3, 15
-    ble s1, t3, encode_calc_overflow
-    li s1, 15
-   
-encode_calc_overflow:
-    li t4, 0           # t4 = e (loop counter)
-    
-calc_overflow_loop:
-    bge t4, s1, adjust_loop
-    slli s2, s2, 1     # overflow <<= 1
-    addi s2, s2, 16    # overflow += 16 
-    addi t4, t4, 1     # e++
-    j calc_overflow_loop
-
-adjust_loop:
-    beqz s1, find_exp_loop       # if exponent == 0, exit
-    bge s0, s2, find_exp_loop    # if value >= overflow, exit
-    
-    # overflow = (overflow - 16) >> 1
-    addi s2, s2, -16
-    srli s2, s2, 1
-    
+    # Adjust down: e = e - 1, recalculate offset
     addi s1, s1, -1
-    j adjust_loop
+    li t1, 1
+    sll t1, t1, s1
+    addi t1, t1, -1
+    slli s2, t1, 4
+    j fine_tune_down
     
-find_exp_loop:
-    li t5, 15
-    bge s1, t5, find_exp_done
+fine_tune_up:
+    # Check if value >= next_offset (should go higher)
+    li t2, 15
+    bge s1, t2, calc_mantissa  # Already at maximum
     
-    # next_overflow = (overflow << 1) + 16
-    slli t6, s2, 1     
-    addi t6, t6, 16
+    slli t3, s2, 1             # next_offset = (offset << 1) + 16
+    addi t3, t3, 16
+    blt s0, t3, calc_mantissa  # Current exponent is correct
     
-    # if (value < next_overflow) break
-    blt s0, t6, find_exp_done
-    
-    # overflow = next_overflow
-    mv s2, t6
-    
-    addi s1, s1, 1    
-    j find_exp_loop
-    
-find_exp_done:
-    # Calculate mantissa = (value - overflow) >> exponent
-    sub t0, s0, s2     
-    srl t0, t0, s1     
-    andi s3, t0, 0x0F
+    # Adjust up: e = e + 1
+    addi s1, s1, 1
+    mv s2, t3
+    j fine_tune_up
+
+calc_mantissa:
+    # mantissa = (value - offset) >> exponent
+    sub t0, s0, s2
+    srl t0, t0, s1
+    andi t0, t0, 0x0F
     
     # Return (exponent << 4) | mantissa
-    slli s1, s1, 4     
-    or a0, s1, s3  
-    
-encode_done:
-    # Restore registers
-    lw ra, 20(sp)
-    lw s0, 16(sp)
-    lw s1, 12(sp)
-    lw s2, 8(sp)
-    lw s3, 4(sp)
-    lw s4, 0(sp)
-    addi sp, sp, 24
+    slli s1, s1, 4
+    or a0, s1, t0
+    j encode_exit
+
+encode_direct_return:
+    mv a0, s0
+
+encode_exit:
+    lw ra, 12(sp)
+    lw s0, 8(sp)
+    lw s1, 4(sp)
+    lw s2, 0(sp)
+    addi sp, sp, 16
     ret
+
 # =====================================================
 # Function: uf8_decode
 # Decode uf8 to uint32_t
