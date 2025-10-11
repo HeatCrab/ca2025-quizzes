@@ -13,6 +13,18 @@
     msg_test_round:   .string "Testing rounding behavior...\n"
     msg_round_pass:   .string "  Rounding: PASS\n"
     msg_round_fail:   .string "  FAIL: case "
+    
+    msg_test_special: .string "Testing special values...\n"
+    msg_special_pass: .string "  Special values: PASS\n"
+    msg_special_fail: .string "  FAIL: "
+    msg_pos_inf_fail: .string "Positive infinity not detected\n"
+    msg_inf_as_nan_fail: .string "Infinity detected as NaN\n"
+    msg_neg_inf_fail: .string "Negative infinity not detected\n"
+    msg_nan_fail:     .string "NaN not detected\n"
+    msg_nan_as_inf_fail: .string "NaN detected as infinity\n"
+    msg_zero_fail:    .string "Zero not detected\n"
+    msg_neg_zero_fail: .string "Negative zero not detected\n"
+    
     msg_expected:     .string ", expected 0x"
     msg_got:          .string ", got 0x"
     msg_newline:      .string "\n"
@@ -72,6 +84,10 @@ main:
     
     # Run test_rounding
     call test_rounding
+    bnez a0, main_failed
+    
+    # Run test_special_values
+    call test_special_values
     bnez a0, main_failed
     
     # All tests passed
@@ -220,7 +236,7 @@ test_rounding_loop:
     bne t0, s4, test_rounding_fail
     
     # Test passed, continue
-    addi s0, s0, 8              # next test case (4 bytes + 2 bytes + 2 padding)
+    addi s0, s0, 8              # next test case
     addi s2, s2, 1
     j test_rounding_loop
 
@@ -265,6 +281,127 @@ test_rounding_exit:
     ret
 
 # =====================================================
+# Function: test_special_values
+# Test special value detection (from q1-bfloat16.c)
+# Output: a0 = 0 if passed, 1 if failed
+# =====================================================
+test_special_values:
+    addi sp, sp, -16
+    sw ra, 12(sp)
+    sw s0, 8(sp)
+    
+    # Print test name
+    la a0, msg_test_special
+    call print_string
+    
+    # Test 1: Positive infinity (0x7F80)
+    li s0, 0x7F80
+    mv a0, s0
+    call bf16_isinf
+    beqz a0, test_special_fail_pos_inf
+    
+    # Test 1b: Should not be NaN
+    mv a0, s0
+    call bf16_isnan
+    bnez a0, test_special_fail_inf_as_nan
+    
+    # Test 2: Negative infinity (0xFF80)
+    li s0, 0xFF80
+    mv a0, s0
+    call bf16_isinf
+    beqz a0, test_special_fail_neg_inf
+    
+    # Test 3: NaN (0x7FC0)
+    li s0, 0x7FC0
+    mv a0, s0
+    call bf16_isnan
+    beqz a0, test_special_fail_nan
+    
+    # Test 3b: Should not be Inf
+    mv a0, s0
+    call bf16_isinf
+    bnez a0, test_special_fail_nan_as_inf
+    
+    # Test 4: Zero (convert 0.0f)
+    li a0, 0x00000000
+    call f32_to_bf16
+    call bf16_iszero
+    beqz a0, test_special_fail_zero
+    
+    # Test 5: Negative zero (convert -0.0f)
+    li a0, 0x80000000
+    call f32_to_bf16
+    call bf16_iszero
+    beqz a0, test_special_fail_neg_zero
+    
+    # All tests passed
+    la a0, msg_special_pass
+    call print_string
+    li a0, 0
+    j test_special_exit
+
+test_special_fail_pos_inf:
+    la a0, msg_special_fail
+    call print_string
+    la a0, msg_pos_inf_fail
+    call print_string
+    li a0, 1
+    j test_special_exit
+
+test_special_fail_inf_as_nan:
+    la a0, msg_special_fail
+    call print_string
+    la a0, msg_inf_as_nan_fail
+    call print_string
+    li a0, 1
+    j test_special_exit
+
+test_special_fail_neg_inf:
+    la a0, msg_special_fail
+    call print_string
+    la a0, msg_neg_inf_fail
+    call print_string
+    li a0, 1
+    j test_special_exit
+
+test_special_fail_nan:
+    la a0, msg_special_fail
+    call print_string
+    la a0, msg_nan_fail
+    call print_string
+    li a0, 1
+    j test_special_exit
+
+test_special_fail_nan_as_inf:
+    la a0, msg_special_fail
+    call print_string
+    la a0, msg_nan_as_inf_fail
+    call print_string
+    li a0, 1
+    j test_special_exit
+
+test_special_fail_zero:
+    la a0, msg_special_fail
+    call print_string
+    la a0, msg_zero_fail
+    call print_string
+    li a0, 1
+    j test_special_exit
+
+test_special_fail_neg_zero:
+    la a0, msg_special_fail
+    call print_string
+    la a0, msg_neg_zero_fail
+    call print_string
+    li a0, 1
+
+test_special_exit:
+    lw ra, 12(sp)
+    lw s0, 8(sp)
+    addi sp, sp, 16
+    ret
+
+# =====================================================
 # Function: bf16_to_f32
 # Convert bfloat16 to float32
 # Input:  a0 = bf16 value (16-bit)
@@ -286,32 +423,91 @@ f32_to_bf16:
     addi sp, sp, -4
     sw t0, 0(sp)
     
-    # Check if NaN/Inf
-    srli t0, a0, 23       
+    # Check if NaN/Inf (exponent == 0xFF)
+    srli t0, a0, 23
     andi t0, t0, 0xFF
     li t1, 0xFF
     beq t0, t1, f32_shift
     
+    # Normal value: apply rounding
     # f32bits += ((f32bits >> 16) & 1) + 0x7FFF
-    srli t0, a0, 16         
-    andi t0, t0, 1          
-    lui t1, 0x8             
-    addi t1, t1, -1         
+    srli t0, a0, 16
+    andi t0, t0, 1
+    lui t1, 0x8
+    addi t1, t1, -1
     add t0, t0, t1
-    add a0, a0, t0          # f32bits += rounding_offset
+    add a0, a0, t0
 
 f32_shift:
     srli a0, a0, 16
-    bne t0, t1, finish_f32_to_bf16  # if not NaN/Inf, finish
+    bne t0, t1, finish_f32_to_bf16
     
-    # If NaN/Inf, just mask to 16 bits
+    # If NaN/Inf, mask to 16 bits
     lui t0, 0x10
-    addi t0, t0, -1         
+    addi t0, t0, -1
     and a0, a0, t0
     
 finish_f32_to_bf16:
     lw t0, 0(sp)
     addi sp, sp, 4
+    ret
+
+# =====================================================
+# Function: bf16_isnan
+# Check if bfloat16 is NaN
+# Input:  a0 = bf16 value (16-bit)
+# Output: a0 = 1 if NaN, 0 otherwise
+# Registers used: a0, t0-t1 (no stack needed)
+# =====================================================
+bf16_isnan:
+    # Check: (a & BF16_EXP_MASK) == BF16_EXP_MASK
+    li t0, 0x7F80
+    and t1, a0, t0              # t1 = a & 0x7F80
+    bne t1, t0, bf16_isnan_false
+    
+    # Check: (a & BF16_MANT_MASK) != 0
+    andi t1, a0, 0x007F         # t1 = a & 0x007F
+    snez a0, t1                 # a0 = (t1 != 0) ? 1 : 0
+    ret
+
+bf16_isnan_false:
+    li a0, 0
+    ret
+
+# =====================================================
+# Function: bf16_isinf
+# Check if bfloat16 is Infinity
+# Input:  a0 = bf16 value (16-bit)
+# Output: a0 = 1 if Inf, 0 otherwise
+# Registers used: a0, t0-t1 (no stack needed)
+# =====================================================
+bf16_isinf:
+    # Check: (a & BF16_EXP_MASK) == BF16_EXP_MASK
+    li t0, 0x7F80
+    and t1, a0, t0              # t1 = a & 0x7F80
+    bne t1, t0, bf16_isinf_false
+    
+    # Check: !(a & BF16_MANT_MASK)
+    andi t1, a0, 0x007F         # t1 = a & 0x007F
+    seqz a0, t1                 # a0 = (t1 == 0) ? 1 : 0
+    ret
+
+bf16_isinf_false:
+    li a0, 0
+    ret
+
+# =====================================================
+# Function: bf16_iszero
+# Check if bfloat16 is zero (±0)
+# Input:  a0 = bf16 value (16-bit)
+# Output: a0 = 1 if zero, 0 otherwise
+# Registers used: a0, t0-t1 (no stack needed)
+# =====================================================
+bf16_iszero:
+    lui t0, 0x8
+    addi t0, t0, -1             # t0 = 0x7FFF
+    and t1, a0, t0              # t1 = a & 0x7FFF
+    seqz a0, t1                 # a0 = (t1 == 0) ? 1 : 0
     ret
 
 # =====================================================
