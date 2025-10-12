@@ -24,6 +24,20 @@
     msg_nan_as_inf_fail: .string "NaN detected as infinity\n"
     msg_zero_fail:    .string "Zero not detected\n"
     msg_neg_zero_fail: .string "Negative zero not detected\n"
+
+    msg_test_compare: .string "Testing comparison operations...\n"
+    msg_compare_pass: .string "  Comparisons: PASS\n"
+    msg_compare_fail: .string "  FAIL: "
+    msg_eq_fail:      .string "Equality test failed\n"
+    msg_ineq_fail:    .string "Inequality test failed\n"
+    msg_lt_fail:      .string "Less than test failed\n"
+    msg_not_lt_fail:  .string "Not less than test failed\n"
+    msg_eq_not_lt_fail: .string "Equal not less than test failed\n"
+    msg_gt_fail:      .string "Greater than test failed\n"
+    msg_not_gt_fail:  .string "Not greater than test failed\n"
+    msg_nan_eq_fail:  .string "NaN equality test failed\n"
+    msg_nan_lt_fail:  .string "NaN less than test failed\n"
+    msg_nan_gt_fail:  .string "NaN greater than test failed\n"
     
     msg_expected:     .string ", expected 0x"
     msg_got:          .string ", got 0x"
@@ -88,6 +102,10 @@ main:
     
     # Run test_special_values
     call test_special_values
+    bnez a0, main_failed
+    
+    # Run test_comparisons (NEW!)
+    call test_comparisons
     bnez a0, main_failed
     
     # All tests passed
@@ -196,6 +214,196 @@ test_basic_exit:
     lw s3, 12(sp)
     lw s4, 8(sp)
     addi sp, sp, 32
+    ret
+
+# =====================================================
+# Function: test_comparisons
+# Test comparison operations (from q1-bfloat16.c)
+# Output: a0 = 0 if passed, 1 if failed
+# =====================================================
+test_comparisons:
+    addi sp, sp, -28
+    sw ra, 24(sp)
+    sw s0, 20(sp)
+    sw s1, 16(sp)
+    sw s2, 12(sp)
+    sw s3, 8(sp)
+    
+    # Print test name
+    la a0, msg_test_compare
+    call print_string
+    
+    # bf16_t a = f32_to_bf16(1.0f);
+    li a0, 0x3F800000
+    call f32_to_bf16
+    mv s0, a0               # s0 = a (1.0)
+    
+    # bf16_t b = f32_to_bf16(2.0f);
+    li a0, 0x40000000
+    call f32_to_bf16
+    mv s1, a0               # s1 = b (2.0)
+    
+    # bf16_t c = f32_to_bf16(1.0f);
+    li a0, 0x3F800000
+    call f32_to_bf16
+    mv s2, a0               # s2 = c (1.0)
+    
+    # Test 1: bf16_eq(a, c) should be true
+    mv a0, s0
+    mv a1, s2
+    call bf16_eq
+    beqz a0, test_compare_fail_eq
+    
+    # Test 2: bf16_eq(a, b) should be false
+    mv a0, s0
+    mv a1, s1
+    call bf16_eq
+    bnez a0, test_compare_fail_ineq
+    
+    # Test 3: bf16_lt(a, b) should be true
+    mv a0, s0
+    mv a1, s1
+    call bf16_lt
+    beqz a0, test_compare_fail_lt
+    
+    # Test 4: bf16_lt(b, a) should be false
+    mv a0, s1
+    mv a1, s0
+    call bf16_lt
+    bnez a0, test_compare_fail_not_lt
+    
+    # Test 5: bf16_lt(a, c) should be false
+    mv a0, s0
+    mv a1, s2
+    call bf16_lt
+    bnez a0, test_compare_fail_eq_not_lt
+    
+    # Test 6: bf16_gt(b, a) should be true
+    mv a0, s1
+    mv a1, s0
+    call bf16_gt
+    beqz a0, test_compare_fail_gt
+    
+    # Test 7: bf16_gt(a, b) should be false
+    mv a0, s0
+    mv a1, s1
+    call bf16_gt
+    bnez a0, test_compare_fail_not_gt
+    
+    # Test 8-10: NaN tests
+    # bf16_t nan_val = BF16_NAN();
+    li s3, 0x7FC0           # s3 = NaN
+    
+    # Test 8: bf16_eq(nan_val, nan_val) should be false
+    mv a0, s3
+    mv a1, s3
+    call bf16_eq
+    bnez a0, test_compare_fail_nan_eq
+    
+    # Test 9: bf16_lt(nan_val, a) should be false
+    mv a0, s3
+    mv a1, s0
+    call bf16_lt
+    bnez a0, test_compare_fail_nan_lt
+    
+    # Test 10: bf16_gt(nan_val, a) should be false
+    mv a0, s3
+    mv a1, s0
+    call bf16_gt
+    bnez a0, test_compare_fail_nan_gt
+    
+    # All tests passed
+    la a0, msg_compare_pass
+    call print_string
+    li a0, 0
+    j test_comparisons_exit
+
+test_compare_fail_eq:
+    la a0, msg_compare_fail
+    call print_string
+    la a0, msg_eq_fail
+    call print_string
+    li a0, 1
+    j test_comparisons_exit
+
+test_compare_fail_ineq:
+    la a0, msg_compare_fail
+    call print_string
+    la a0, msg_ineq_fail
+    call print_string
+    li a0, 1
+    j test_comparisons_exit
+
+test_compare_fail_lt:
+    la a0, msg_compare_fail
+    call print_string
+    la a0, msg_lt_fail
+    call print_string
+    li a0, 1
+    j test_comparisons_exit
+
+test_compare_fail_not_lt:
+    la a0, msg_compare_fail
+    call print_string
+    la a0, msg_not_lt_fail
+    call print_string
+    li a0, 1
+    j test_comparisons_exit
+
+test_compare_fail_eq_not_lt:
+    la a0, msg_compare_fail
+    call print_string
+    la a0, msg_eq_not_lt_fail
+    call print_string
+    li a0, 1
+    j test_comparisons_exit
+
+test_compare_fail_gt:
+    la a0, msg_compare_fail
+    call print_string
+    la a0, msg_gt_fail
+    call print_string
+    li a0, 1
+    j test_comparisons_exit
+
+test_compare_fail_not_gt:
+    la a0, msg_compare_fail
+    call print_string
+    la a0, msg_not_gt_fail
+    call print_string
+    li a0, 1
+    j test_comparisons_exit
+
+test_compare_fail_nan_eq:
+    la a0, msg_compare_fail
+    call print_string
+    la a0, msg_nan_eq_fail
+    call print_string
+    li a0, 1
+    j test_comparisons_exit
+
+test_compare_fail_nan_lt:
+    la a0, msg_compare_fail
+    call print_string
+    la a0, msg_nan_lt_fail
+    call print_string
+    li a0, 1
+    j test_comparisons_exit
+
+test_compare_fail_nan_gt:
+    la a0, msg_compare_fail
+    call print_string
+    la a0, msg_nan_gt_fail
+    call print_string
+    li a0, 1
+
+test_comparisons_exit:
+    lw ra, 24(sp)
+    lw s0, 20(sp)
+    lw s1, 16(sp)
+    lw s2, 12(sp)
+    lw s3, 8(sp)
+    addi sp, sp, 28
     ret
 
 # =====================================================
@@ -508,6 +716,156 @@ bf16_iszero:
     addi t0, t0, -1             # t0 = 0x7FFF
     and t1, a0, t0              # t1 = a & 0x7FFF
     seqz a0, t1                 # a0 = (t1 == 0) ? 1 : 0
+    ret
+
+# =====================================================
+# Function: bf16_eq
+# Check if two bfloat16 values are equal
+# Input:  a0 = bf16 value a, a1 = bf16 value b
+# Output: a0 = 1 if equal, 0 otherwise
+# Registers used: a0-a1, t0-t2, s0-s1, ra (uses stack)
+# =====================================================
+bf16_eq:
+    addi sp, sp, -16
+    sw ra, 12(sp)
+    sw s0, 8(sp)
+    sw s1, 4(sp)
+    
+    mv s0, a0               
+    mv s1, a1              
+    
+    # Check if a is NaN
+    mv a0, s0
+    call bf16_isnan
+    bnez a0, bf16_eq_false
+    
+    # Check if b is NaN
+    mv a0, s1
+    call bf16_isnan
+    bnez a0, bf16_eq_false
+    
+    # Check if both are zero
+    mv a0, s0
+    call bf16_iszero
+    beqz a0, bf16_eq_compare_bits
+    
+    mv a0, s1
+    call bf16_iszero
+    bnez a0, bf16_eq_true   # both zero
+    
+bf16_eq_compare_bits:
+    # Compare bits directly
+    beq s0, s1, bf16_eq_true
+    
+bf16_eq_false:
+    li a0, 0
+    j bf16_eq_exit
+
+bf16_eq_true:
+    li a0, 1
+
+bf16_eq_exit:
+    lw ra, 12(sp)
+    lw s0, 8(sp)
+    lw s1, 4(sp)
+    addi sp, sp, 16
+    ret
+
+# =====================================================
+# Function: bf16_lt
+# Check if a < b
+# Input:  a0 = bf16 value a, a1 = bf16 value b
+# Output: a0 = 1 if a < b, 0 otherwise
+# Registers used: a0-a1, t0-t2, s0-s1, ra (uses stack)
+# =====================================================
+bf16_lt:
+    addi sp, sp, -16
+    sw ra, 12(sp)
+    sw s0, 8(sp)
+    sw s1, 4(sp)
+    
+    mv s0, a0               # save a
+    mv s1, a1               # save b
+    
+    # Check if a is NaN
+    mv a0, s0
+    call bf16_isnan
+    bnez a0, bf16_lt_false
+    
+    # Check if b is NaN
+    mv a0, s1
+    call bf16_isnan
+    bnez a0, bf16_lt_false
+    
+    # Check if both are zero
+    mv a0, s0
+    call bf16_iszero
+    beqz a0, bf16_lt_check_signs
+    
+    mv a0, s1
+    call bf16_iszero
+    bnez a0, bf16_lt_false  # both zero
+    
+bf16_lt_check_signs:
+    # Extract signs
+    srli t0, s0, 15         
+    andi t0, t0, 1
+    srli t1, s1, 15         
+    andi t1, t1, 1
+    
+    # If signs differ: a < b iff sign_a > sign_b (negative < positive)
+    bne t0, t1, bf16_lt_diff_signs
+    
+    # Same sign: compare bits
+    # If positive (sign=0): a < b iff a.bits < b.bits
+    # If negative (sign=1): a < b iff a.bits > b.bits
+    beqz t0, bf16_lt_positive
+    
+bf16_lt_negative:
+    bgt s0, s1, bf16_lt_true
+    j bf16_lt_false
+
+bf16_lt_positive:
+    blt s0, s1, bf16_lt_true
+    j bf16_lt_false
+
+bf16_lt_diff_signs:
+    bgt t0, t1, bf16_lt_true
+    j bf16_lt_false
+
+bf16_lt_false:
+    li a0, 0
+    j bf16_lt_exit
+
+bf16_lt_true:
+    li a0, 1
+
+bf16_lt_exit:
+    lw ra, 12(sp)
+    lw s0, 8(sp)
+    lw s1, 4(sp)
+    addi sp, sp, 16
+    ret
+
+# =====================================================
+# Function: bf16_gt
+# Check if a > b
+# Input:  a0 = bf16 value a, a1 = bf16 value b
+# Output: a0 = 1 if a > b, 0 otherwise
+# Registers used: a0-a1, ra (uses stack)
+# =====================================================
+bf16_gt:
+    addi sp, sp, -4
+    sw ra, 0(sp)
+    
+    # Swap arguments and call bf16_lt
+    mv t0, a0
+    mv a0, a1
+    mv a1, t0
+    call bf16_lt
+    
+    lw ra, 0(sp)
+    addi sp, sp, 4
     ret
 
 # =====================================================
