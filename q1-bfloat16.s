@@ -38,6 +38,12 @@
     msg_nan_eq_fail:  .string "NaN equality test failed\n"
     msg_nan_lt_fail:  .string "NaN less than test failed\n"
     msg_nan_gt_fail:  .string "NaN greater than test failed\n"
+
+    msg_test_arith:   .string "Testing arithmetic operations...\n"
+    msg_add_pass:     .string "  Arithmetic (add): PASS\n"
+    msg_add_fail:     .string "  Arithmetic (add) FAIL: case "
+    msg_sub_pass:     .string "  Arithmetic (sub): PASS\n"
+    msg_sub_fail:     .string "  Arithmetic (sub) FAIL: case "
     
     msg_expected:     .string ", expected 0x"
     msg_got:          .string ", got 0x"
@@ -81,6 +87,73 @@
         .half 0x0000
     rounding_test_count: .word 5
 
+    # Test data for arithmetic operations
+    add_test_cases:
+        # Test case 0: 1.0 + 2.0 = 3.0
+        .word 0x3F800000    # a = 1.0f
+        .word 0x40000000    # b = 2.0f
+        .half 0x4040        # expected result = 3.0 (bf16)
+        .half 0x0000        # padding
+        
+        # Test case 1: -1.0 + 1.0 = 0.0
+        .word 0xBF800000    # a = -1.0f
+        .word 0x3F800000    # b = 1.0f
+        .half 0x0000        # expected result = 0.0
+        .half 0x0000        # padding
+        
+        # Test case 2: 0.5 + 0.5 = 1.0
+        .word 0x3F000000    # a = 0.5f
+        .word 0x3F000000    # b = 0.5f
+        .half 0x3F80        # expected result = 1.0
+        .half 0x0000        # padding
+        
+        # Test case 3: 1.5 + 2.5 = 4.0
+        .word 0x3FC00000    # a = 1.5f
+        .word 0x40200000    # b = 2.5f
+        .half 0x4080        # expected result = 4.0
+        .half 0x0000        # padding
+        
+        # Test case 4: -2.0 + -3.0 = -5.0
+        .word 0xC0000000    # a = -2.0f
+        .word 0xC0400000    # b = -3.0f
+        .half 0xC0A0        # expected result = -5.0
+        .half 0x0000        # padding
+    
+    add_test_count: .word 5
+
+# Test data for subtraction
+    sub_test_cases:
+        # Test case 0: 3.0 - 1.0 = 2.0
+        .word 0x40400000    # a = 3.0f
+        .word 0x3F800000    # b = 1.0f
+        .half 0x4000        # expected result = 2.0 (bf16)
+        .half 0x0000        # padding
+        
+        # Test case 1: 1.0 - 1.0 = 0.0
+        .word 0x3F800000    # a = 1.0f
+        .word 0x3F800000    # b = 1.0f
+        .half 0x0000        # expected result = 0.0
+        .half 0x0000        # padding
+        
+        # Test case 2: 0.5 - 1.5 = -1.0
+        .word 0x3F000000    # a = 0.5f
+        .word 0x3FC00000    # b = 1.5f
+        .half 0xBF80        # expected result = -1.0
+        .half 0x0000        # padding
+        
+        # Test case 3: -2.0 - 3.0 = -5.0
+        .word 0xC0000000    # a = -2.0f
+        .word 0x40400000    # b = 3.0f
+        .half 0xC0A0        # expected result = -5.0
+        .half 0x0000        # padding
+        
+        # Test case 4: 5.0 - (-2.0) = 7.0
+        .word 0x40A00000    # a = 5.0f
+        .word 0xC0000000    # b = -2.0f
+        .half 0x40E0        # expected result = 7.0
+        .half 0x0000        # padding
+    
+    sub_test_count: .word 5
 .text
 .globl main
 
@@ -104,8 +177,12 @@ main:
     call test_special_values
     bnez a0, main_failed
     
-    # Run test_comparisons (NEW!)
+    # Run test_comparisons
     call test_comparisons
+    bnez a0, main_failed
+
+    # Run test_arithmetic
+    call test_arithmetic
     bnez a0, main_failed
     
     # All tests passed
@@ -610,6 +687,154 @@ test_special_exit:
     ret
 
 # =====================================================
+# Function: test_arithmetic
+# Test all arithmetic operations (add, sub, mul, div, sqrt)
+# Output: a0 = 0 if all passed, 1 if any failed
+# =====================================================
+test_arithmetic:
+    addi sp, sp, -36
+    sw ra, 32(sp)
+    sw s0, 28(sp)
+    sw s1, 24(sp)
+    sw s2, 20(sp)
+    sw s3, 16(sp)
+    sw s4, 12(sp)
+    sw s5, 8(sp)
+    sw s6, 4(sp)       # s6 = total failures
+    
+    # Print test header
+    la a0, msg_test_arith
+    call print_string
+    
+    li s6, 0            # s6 = 0 (no failures yet)
+    
+    # ===== Test ADD =====
+    la s0, add_test_cases
+    lw s1, add_test_count
+    li s2, 0
+    
+test_arith_add_loop:
+    bge s2, s1, test_arith_add_done
+    
+    lw s3, 0(s0)
+    lw s4, 4(s0)
+    lhu s5, 8(s0)
+    
+    mv a0, s3
+    call f32_to_bf16
+    mv t0, a0
+    
+    mv a0, s4
+    call f32_to_bf16
+    mv t1, a0
+    
+    mv a0, t0
+    mv a1, t1
+    call bf16_add
+    mv t2, a0
+    
+    bne t2, s5, test_arith_add_fail
+    
+    addi s0, s0, 12
+    addi s2, s2, 1
+    j test_arith_add_loop
+
+test_arith_add_fail:
+    la a0, msg_add_fail
+    call print_string
+    mv a0, s2
+    call print_decimal
+    la a0, msg_expected
+    call print_string
+    mv a0, s5
+    call print_hex16
+    la a0, msg_got
+    call print_string
+    mv a0, t2
+    call print_hex16
+    la a0, msg_newline
+    call print_string
+    addi s6, s6, 1      # increment failure count
+    j test_arith_sub_start
+
+test_arith_add_done:
+    la a0, msg_add_pass
+    call print_string
+    
+    # ===== Test SUB =====
+test_arith_sub_start:
+    la s0, sub_test_cases
+    lw s1, sub_test_count
+    li s2, 0
+    
+test_arith_sub_loop:
+    bge s2, s1, test_arith_sub_done
+    
+    lw s3, 0(s0)
+    lw s4, 4(s0)
+    lhu s5, 8(s0)
+    
+    mv a0, s3
+    call f32_to_bf16
+    mv t0, a0
+    
+    mv a0, s4
+    call f32_to_bf16
+    mv t1, a0
+    
+    mv a0, t0
+    mv a1, t1
+    call bf16_sub
+    mv t2, a0
+    
+    bne t2, s5, test_arith_sub_fail
+    
+    addi s0, s0, 12
+    addi s2, s2, 1
+    j test_arith_sub_loop
+
+test_arith_sub_fail:
+    la a0, msg_sub_fail
+    call print_string
+    mv a0, s2
+    call print_decimal
+    la a0, msg_expected
+    call print_string
+    mv a0, s5
+    call print_hex16
+    la a0, msg_got
+    call print_string
+    mv a0, t2
+    call print_hex16
+    la a0, msg_newline
+    call print_string
+    addi s6, s6, 1
+    j test_arith_done 
+
+test_arith_sub_done:
+    la a0, msg_sub_pass
+    call print_string
+    
+    # TODO: test_arith_mul_start
+    # TODO: test_arith_div_start
+    # TODO: test_arith_sqrt_start
+    
+test_arith_done:
+    # Return failure count (0 = all pass, >0 = some failed)
+    mv a0, s6
+    
+    lw ra, 32(sp)
+    lw s0, 28(sp)
+    lw s1, 24(sp)
+    lw s2, 20(sp)
+    lw s3, 16(sp)
+    lw s4, 12(sp)
+    lw s5, 8(sp)
+    lw s6, 4(sp)
+    addi sp, sp, 36
+    ret
+
+# =====================================================
 # Function: bf16_to_f32
 # Convert bfloat16 to float32
 # Input:  a0 = bf16 value (16-bit)
@@ -716,6 +941,194 @@ bf16_iszero:
     addi t0, t0, -1             # t0 = 0x7FFF
     and t1, a0, t0              # t1 = a & 0x7FFF
     seqz a0, t1                 # a0 = (t1 == 0) ? 1 : 0
+    ret
+
+# =====================================================
+# Function: bf16_add
+# Add two bfloat16 values (strictly follows q1-bfloat16.c)
+# Input:  a0 = bf16 value a, a1 = bf16 value b
+# Output: a0 = bf16 result (a + b)
+# Registers used: s0-s7, t0-t4 (uses stack for saving s0-s7)
+# =====================================================
+bf16_add:
+    addi sp, sp, -36
+    sw ra, 32(sp)
+    sw s0, 28(sp)
+    sw s1, 24(sp)
+    sw s2, 20(sp)
+    sw s3, 16(sp)
+    sw s4, 12(sp)
+    sw s5, 8(sp)
+    sw s6, 4(sp)
+    sw s7, 0(sp)
+
+    mv s0, a0               # s0 = a
+    mv s1, a1               # s1 = b
+
+    srli s2, s0, 15         # s2 = sign_a
+    andi s2, s2, 1
+    srli s3, s0, 7          # s3 = exp_a
+    andi s3, s3, 0xFF
+    andi s4, s0, 0x7F       # s4 = mant_a
+
+    srli s5, s1, 15         # s5 = sign_b
+    andi s5, s5, 1
+    srli s6, s1, 7          # s6 = exp_b
+    andi s6, s6, 0xFF
+    andi s7, s1, 0x7F       # s7 = mant_b
+    
+    li t0, 0xFF
+    bne s3, t0, bf16_add_check_exp_b    # if (exp_a != 0xFF) check exp_b
+    bnez s4, bf16_add_return_a          # a is NaN, return a
+    bne s6, t0, bf16_add_return_a       # if (exp_b != 0xFF) return a
+    bne s2, s5, bf16_add_return_nan 
+    bnez s7, bf16_add_return_b          # b is NaN, return b
+
+bf16_add_return_nan:
+    li a0, 0x7FC0
+    j bf16_add_exit
+
+bf16_add_check_exp_b:
+    li t0, 0xFF
+    bne s6, t0, bf16_add_implicit
+    j bf16_add_return_b          
+
+bf16_add_return_a:
+    mv a0, s0
+    j bf16_add_exit
+
+bf16_add_return_b:
+    mv a0, s1
+    j bf16_add_exit
+
+bf16_add_check_inf:
+    or t0, s3, s6          # if (exp_a == 0 && exp_b == 0)
+    bnez t0, bf16_add_return_b
+    or t0, s4, s7
+    bnez t0, bf16_add_return_a
+    
+bf16_add_implicit:
+    beqz s3, bf16_add_align_exponents
+    ori s4, s4, 0x80       # if (exp_a != 0) mant_a |= 0x80
+    beqz s6, bf16_add_align_exponents
+    ori s7, s7, 0x80       # if (exp_b != 0) mant_b |= 0x80
+
+# t1 = result_sign
+# t2 = result_exp
+# t3 = result_mant    
+bf16_add_align_exponents:
+    beq s3, s6, bf16_add_get_result_exp
+    blt s3, s6, bf16_add_exp_b_larger       # exp_b > exp_a
+    
+    # exp_a >= exp_b
+    mv t2, s3               # s8 = result_exp = exp_a
+    sub t0, s3, s6          # t0 = exp_diff
+    
+    # Shift mant_b right by exp_diff
+    li t1, 8
+    bge t0, t1, bf16_add_return_a
+    srl s7, s7, t0
+    j bf16_add_perform_op
+    
+bf16_add_exp_b_larger:
+    # exp_b > exp_a
+    mv t2, s6               # s8 = result_exp = exp_b
+    sub t0, s6, s3          # t0 = exp_diff
+    
+    # Shift mant_a right by exp_diff
+    li t1, 8
+    bge t0, t1, bf16_add_return_b
+    srl s4, s4, t0
+    j bf16_add_perform_op
+
+bf16_add_get_result_exp:
+    mv t2, s3               # s8 = result_exp = exp_a (== exp_b)
+
+bf16_add_perform_op:
+    # Step 5: Perform addition or subtraction based on signs
+    bne s2, s5, bf16_add_different_signs
+    
+    mv t1, s2               # t1 = sign_a
+    add t3, s4, s7          # s9 = result_mant
+
+    andi t0, t3, 0x100
+    beqz t0, bf16_add_assemble
+    srli t3, t3, 1
+    addi t2, t2, 1
+    li t4, 0xFF
+    bltu t2, t4, bf16_add_assemble
+    slli t1, t1, 15
+    li t4 , 0x7F80
+    or a0, t1, t4
+    j bf16_add_exit
+    
+bf16_add_different_signs:
+    bge s4, s7, bf16_add_a_larger
+    mv t1, s5               # result_sign = sign_b
+    sub t3, s7, s4          # result_mant = mant_b - mant_a
+    j bf16_add_normalize
+    
+bf16_add_a_larger:
+    mv t1, s2               # result_sign = sign_a
+    sub t3, s4, s7          # result_mant = mant_a - mant_b
+    
+bf16_add_normalize:
+    bnez t3, bf16_add_normalize_underflow
+    li a0, 0
+    j bf16_add_exit
+    
+bf16_add_normalize_underflow:
+    andi t4, t3, 0x80
+    bnez t4, bf16_add_assemble
+
+    slli t3, t3, 1
+    addi t2, t2, -1
+    bgtz t2, bf16_add_normalize_underflow
+    
+    li a0, 0
+    j bf16_add_exit
+
+bf16_add_assemble:
+    slli t1, t1, 15
+    andi t2, t2, 0xFF
+    slli t2, t2, 7
+    or a0, t1, t2
+    andi t3, t3, 0x7F
+    or a0, a0, t3
+    j bf16_add_exit
+    
+bf16_add_exit:
+    lw ra, 32(sp)
+    lw s0, 28(sp)
+    lw s1, 24(sp)
+    lw s2, 20(sp)
+    lw s3, 16(sp)
+    lw s4, 12(sp)
+    lw s5, 8(sp)
+    lw s6, 4(sp)
+    lw s7, 0(sp)
+    addi sp, sp, 36
+    ret
+
+# =====================================================
+# Function: bf16_sub
+# Subtract two bfloat16 values (a - b)
+# Input:  a0 = bf16 value a, a1 = bf16 value b
+# Output: a0 = bf16 result (a - b)
+# =====================================================
+bf16_sub:
+    addi sp, sp, -4
+    sw ra, 0(sp)
+    
+    # b.bits ^= 0x8000 (flip sign bit)
+    lui t0, 0x8         # t0 = 0x8000
+    xor a1, a1, t0      # a1 ^= 0x8000
+    
+    # return bf16_add(a, b)
+    call bf16_add
+    
+    lw ra, 0(sp)
+    addi sp, sp, 4
     ret
 
 # =====================================================
