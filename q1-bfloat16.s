@@ -43,7 +43,9 @@
     msg_add_pass:     .string "  Arithmetic (add): PASS\n"
     msg_add_fail:     .string "  Arithmetic (add) FAIL: case "
     msg_sub_pass:     .string "  Arithmetic (sub): PASS\n"
-    msg_sub_fail:     .string "  Arithmetic (sub) FAIL: case "
+    msg_sub_fail:     .string "  Arithmetic (sub) FAIL: case "        
+    msg_mul_pass:     .string "  Arithmetic (mul): PASS\n"
+    msg_mul_fail:     .string "  Arithmetic (mul) FAIL: case "
     
     msg_expected:     .string ", expected 0x"
     msg_got:          .string ", got 0x"
@@ -154,6 +156,40 @@
         .half 0x0000        # padding
     
     sub_test_count: .word 5
+
+    # Test data for multiplication
+    mul_test_cases:
+        # Test case 0: 2.0 * 3.0 = 6.0
+        .word 0x40000000    # a = 2.0f
+        .word 0x40400000    # b = 3.0f
+        .half 0x40C0        # expected result = 6.0 (bf16)
+        .half 0x0000        # padding
+        
+        # Test case 1: 1.0 * 1.0 = 1.0
+        .word 0x3F800000    # a = 1.0f
+        .word 0x3F800000    # b = 1.0f
+        .half 0x3F80        # expected result = 1.0
+        .half 0x0000        # padding
+        
+        # Test case 2: -2.0 * 3.0 = -6.0
+        .word 0xC0000000    # a = -2.0f
+        .word 0x40400000    # b = 3.0f
+        .half 0xC0C0        # expected result = -6.0
+        .half 0x0000        # padding
+        
+        # Test case 3: -2.0 * -3.0 = 6.0
+        .word 0xC0000000    # a = -2.0f
+        .word 0xC0400000    # b = -3.0f
+        .half 0x40C0        # expected result = 6.0
+        .half 0x0000        # padding
+        
+        # Test case 4: 0.5 * 4.0 = 2.0
+        .word 0x3F000000    # a = 0.5f
+        .word 0x40800000    # b = 4.0f
+        .half 0x4000        # expected result = 2.0
+        .half 0x0000        # padding
+    
+    mul_test_count: .word 5
 .text
 .globl main
 
@@ -809,13 +845,66 @@ test_arith_sub_fail:
     la a0, msg_newline
     call print_string
     addi s6, s6, 1
-    j test_arith_done 
+    j test_arith_mul_start 
 
 test_arith_sub_done:
     la a0, msg_sub_pass
     call print_string
     
-    # TODO: test_arith_mul_start
+    # ===== Test MUL =====
+test_arith_mul_start:
+    la s0, mul_test_cases
+    lw s1, mul_test_count
+    li s2, 0
+    
+test_arith_mul_loop:
+    bge s2, s1, test_arith_mul_done
+    
+    lw s3, 0(s0)
+    lw s4, 4(s0)
+    lhu s5, 8(s0)
+    
+    mv a0, s3
+    call f32_to_bf16
+    mv t0, a0
+    
+    mv a0, s4
+    call f32_to_bf16
+    mv t1, a0
+    
+    mv a0, t0
+    mv a1, t1
+    call bf16_mul
+    mv t2, a0
+    
+    bne t2, s5, test_arith_mul_fail
+    
+    addi s0, s0, 12
+    addi s2, s2, 1
+    j test_arith_mul_loop
+
+test_arith_mul_fail:
+    la a0, msg_mul_fail
+    call print_string
+    mv a0, s2
+    call print_decimal
+    la a0, msg_expected
+    call print_string
+    mv a0, s5
+    call print_hex16
+    la a0, msg_got
+    call print_string
+    mv a0, t2
+    call print_hex16
+    la a0, msg_newline
+    call print_string
+    addi s6, s6, 1
+    j test_arith_done
+
+test_arith_mul_done:
+    la a0, msg_mul_pass
+    call print_string
+
     # TODO: test_arith_div_start
     # TODO: test_arith_sqrt_start
     
@@ -1129,6 +1218,190 @@ bf16_sub:
     
     lw ra, 0(sp)
     addi sp, sp, 4
+    ret
+
+# =====================================================
+# Function: bf16_mul
+# Multiply two bfloat16 values (a * b)
+# Input:  a0 = bf16 value a, a1 = bf16 value b
+# Output: a0 = bf16 result (a * b)
+# Registers used: s0-s7, t0-t5 (uses stack for saving s0-s7)
+# =====================================================
+bf16_mul:
+    addi sp, sp, -36
+    sw ra, 32(sp)
+    sw s0, 28(sp)
+    sw s1, 24(sp)
+    sw s2, 20(sp)
+    sw s3, 16(sp)
+    sw s4, 12(sp)
+    sw s5, 8(sp)
+    sw s6, 4(sp)
+    sw s7, 0(sp)
+
+    mv s0, a0               # s0 = a
+    mv s1, a1               # s1 = b
+
+    # Extract fields
+    srli s2, s0, 15         # s2 = sign_a
+    andi s2, s2, 1
+    srli s3, s0, 7          # s3 = exp_a
+    andi s3, s3, 0xFF
+    andi s4, s0, 0x7F       # s4 = mant_a
+
+    srli s5, s1, 15         # s5 = sign_b
+    andi s5, s5, 1
+    srli s6, s1, 7          # s6 = exp_b
+    andi s6, s6, 0xFF
+    andi s7, s1, 0x7F       # s7 = mant_b
+    
+    # t1 = (Result sign = sign_a ^ sign_b)
+    xor t1, s2, s5
+    
+    li t0, 0xFF
+    # Check if either operand is zero: !(exp || mant)
+    or t2, s6, s7          # t2 = (exp_b || mant_b)
+    or t3, s3, s4          # t3 = (exp_a || mant_a)
+    beq s3, t0, bf16_mul_check_mant_a
+    beq s6, t0, bf16_mul_check_mant_b
+
+    beqz t3, bf16_mul_return_shift
+    beqz t2, bf16_mul_return_shift
+    j bf16_mul_adjust_a
+    
+bf16_mul_return_shift:
+    slli a0, t1, 15
+    j bf16_mul_exit
+    
+bf16_mul_check_mant_a:
+    beqz s4, bf16_mul_check_b
+    mv a0, s0
+    j bf16_mul_exit
+
+bf16_mul_check_mant_b:
+    beqz s7, bf16_mul_check_a
+    mv a0, s1
+    j bf16_mul_exit
+
+bf16_mul_check_a:
+    bnez t3, bf16_mul_return_mask_sign
+    li a0, 0x7FC0
+    j bf16_mul_exit
+
+bf16_mul_check_b:
+    bnez t2, bf16_mul_return_mask_sign
+    li a0, 0x7FC0
+    j bf16_mul_exit
+
+bf16_mul_return_mask_sign:
+    slli t1, t1, 15
+    li t0, 0x7F80
+    or a0, t1, t0
+    j bf16_mul_exit
+    
+bf16_mul_adjust_a:
+    # t5 = exp_adjust
+    li t5, 0
+    beqz s3, bf16_mul_normalize_adjust_a
+    ori s4, s4, 0x80
+
+bf16_mul_adjust_b:
+    beqz s6, bf16_mul_normalize_adjust_b
+    ori s7, s7, 0x80
+    j bf16_mul_mantisa
+
+bf16_mul_normalize_adjust_a:
+    andi t0, s4, 0x80
+    bnez t0, bf16_mul_exp_a_adj_done
+    slli s4, s4, 1
+    addi t5, t5, -1
+    j bf16_mul_normalize_adjust_a
+
+bf16_mul_exp_a_adj_done:
+    li s3, 1
+    j bf16_mul_adjust_b
+
+bf16_mul_normalize_adjust_b:
+    andi t0, s7, 0x80
+    bnez t0, bf16_mul_exp_b_adj_done
+    slli s7, s7, 1
+    addi t5, t5, -1
+    j bf16_mul_normalize_adjust_b
+
+bf16_mul_exp_b_adj_done:
+    li s6, 1
+
+# t3 = (result_mant = (uint32_t) mant_a * mant_b)
+bf16_mul_mantisa:
+    li t3, 0
+    li t4, 8
+
+bf16_mul_mant_loop:
+    beqz t4, bf16_mul_exponent
+    
+    andi t0, s7, 1
+    beqz t0, bf16_mul_mant_skip
+    add t3, t3, s4
+    
+bf16_mul_mant_skip:
+    slli s4, s4, 1
+    srli s7, s7, 1
+    addi t4, t4, -1
+    j bf16_mul_mant_loop
+    
+bf16_mul_exponent:
+    # t2 = (result_exp = exp_a + exp_b - 127 + t5)
+    add t2, s3, s6
+    addi t2, t2, -127       # t2 -= bias
+    add t2, t2, t5          # t2 += exp_adjust
+    
+    # Normalize: check mantissa
+    li t0, 0x8000
+    and t0, t3, t0
+    beqz t0, bf16_mul_normalize_shift
+    
+    srli t3, t3, 8
+    andi t3, t3, 0x7F
+    addi t2, t2, 1 
+    j bf16_mul_check_exp
+    
+bf16_mul_normalize_shift:
+    srli t3, t3, 7
+    andi t3, t3, 0x7F
+    
+bf16_mul_check_exp:
+    li t0, 0xFF
+    bge t2, t0, bf16_mul_return_mask_sign
+    # Check for underflow
+    li t0, 1
+    bgeu t2, t0, bf16_mul_return_assemble
+    li t0, -6
+    blt t2, t0, bf16_mul_return_shift
+    
+    li t0, 1
+    sub t0, t0, t2
+    srl t3, t3, t0
+    li t2, 0
+
+bf16_mul_return_assemble:
+    slli a0, t1, 15         # sign
+    andi t2, t2, 0xFF
+    slli t2, t2, 7          
+    andi t3, t3, 0x7F
+    or a0, a0, t2           # exp
+    or a0, a0, t3           # mant
+    
+bf16_mul_exit:
+    lw ra, 32(sp)
+    lw s0, 28(sp)
+    lw s1, 24(sp)
+    lw s2, 20(sp)
+    lw s3, 16(sp)
+    lw s4, 12(sp)
+    lw s5, 8(sp)
+    lw s6, 4(sp)
+    lw s7, 0(sp)
+    addi sp, sp, 36
     ret
 
 # =====================================================
