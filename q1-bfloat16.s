@@ -48,6 +48,8 @@
     msg_mul_fail:     .string "  Arithmetic (mul) FAIL: case "
     msg_div_pass:     .string "  Arithmetic (div): PASS\n"
     msg_div_fail:     .string "  Arithmetic (div) FAIL: case "
+    msg_sqrt_pass:    .string "  Arithmetic (sqrt): PASS\n"
+    msg_sqrt_fail:    .string "  Arithmetic (sqrt) FAIL: case "
     
     msg_expected:     .string ", expected 0x"
     msg_got:          .string ", got 0x"
@@ -226,6 +228,35 @@
         .half 0x0000        # padding
     
     div_test_count: .word 5
+
+    # Test data for square root
+    sqrt_test_cases:
+        # Test case 0: sqrt(4.0) = 2.0
+        .word 0x40800000    # a = 4.0f
+        .half 0x4000        # expected result = 2.0 (bf16)
+        .half 0x0000        # padding
+        
+        # Test case 1: sqrt(9.0) = 3.0
+        .word 0x41100000    # a = 9.0f
+        .half 0x4040        # expected result = 3.0
+        .half 0x0000        # padding
+        
+        # Test case 2: sqrt(16.0) = 4.0
+        .word 0x41800000    # a = 16.0f
+        .half 0x4080        # expected result = 4.0
+        .half 0x0000        # padding
+        
+        # Test case 3: sqrt(1.0) = 1.0
+        .word 0x3F800000    # a = 1.0f
+        .half 0x3F80        # expected result = 1.0
+        .half 0x0000        # padding
+        
+        # Test case 4: sqrt(0.25) = 0.5
+        .word 0x3E800000    # a = 0.25f
+        .half 0x3F00        # expected result = 0.5
+        .half 0x0000        # padding
+    
+    sqrt_test_count: .word 5
 .text
 .globl main
 
@@ -989,13 +1020,58 @@ test_arith_div_fail:
     la a0, msg_newline
     call print_string
     addi s6, s6, 1
-    j test_arith_done
+    j test_arith_sqrt_start
 
 test_arith_div_done:
     la a0, msg_div_pass
     call print_string
 
-    # TODO: test_arith_sqrt_start
+    # ===== Test SQRT =====
+test_arith_sqrt_start:
+    la s0, sqrt_test_cases
+    lw s1, sqrt_test_count
+    li s2, 0
+    
+test_arith_sqrt_loop:
+    bge s2, s1, test_arith_sqrt_done
+    
+    lw s3, 0(s0)        # Load f32 input
+    lhu s5, 4(s0)       # Load expected bf16 result
+    
+    mv a0, s3
+    call f32_to_bf16
+    mv a0, a0           # Convert to bf16 first
+    
+    call bf16_sqrt      # Call sqrt
+    mv t2, a0
+    
+    bne t2, s5, test_arith_sqrt_fail
+    
+    addi s0, s0, 8      # Next test case (8 bytes: 4 word + 2 half + 2 padding)
+    addi s2, s2, 1
+    j test_arith_sqrt_loop
+
+test_arith_sqrt_fail:
+    la a0, msg_sqrt_fail
+    call print_string
+    mv a0, s2
+    call print_decimal
+    la a0, msg_expected
+    call print_string
+    mv a0, s5
+    call print_hex16
+    la a0, msg_got
+    call print_string
+    mv a0, t2
+    call print_hex16
+    la a0, msg_newline
+    call print_string
+    addi s6, s6, 1
+    j test_arith_done
+
+test_arith_sqrt_done:
+    la a0, msg_sqrt_pass
+    call print_string
 
 test_arith_done:
     # Return failure count (0 = all pass, >0 = some failed)
@@ -1666,6 +1742,180 @@ bf16_div_assemble:
     or a0, a0, t3           # mant
     
 bf16_div_exit:
+    lw ra, 32(sp)
+    lw s0, 28(sp)
+    lw s1, 24(sp)
+    lw s2, 20(sp)
+    lw s3, 16(sp)
+    lw s4, 12(sp)
+    lw s5, 8(sp)
+    lw s6, 4(sp)
+    lw s7, 0(sp)
+    addi sp, sp, 36
+    ret
+
+# =====================================================
+# Function: bf16_sqrt
+# Calculate square root of a bfloat16 value
+# Input:  a0 = bf16 value a
+# Output: a0 = bf16 result (sqrt(a))
+# Registers used: s0-s7, t0-t6 (uses stack)
+# =====================================================
+bf16_sqrt:
+    addi sp, sp, -36
+    sw ra, 32(sp)
+    sw s0, 28(sp)
+    sw s1, 24(sp)
+    sw s2, 20(sp)
+    sw s3, 16(sp)
+    sw s4, 12(sp)
+    sw s5, 8(sp)
+    sw s6, 4(sp)
+    sw s7, 0(sp)
+
+    mv s0, a0               # s0 = a
+
+    # Extract fields
+    srli s1, s0, 15         # s1 = sign
+    andi s1, s1, 1
+    srli s2, s0, 7          # s2 = exp
+    andi s2, s2, 0xFF
+    andi s3, s0, 0x7F       # s3 = mant
+    
+    li t0, 0xFF
+    bne s2, t0, bf16_sqrt_check_zero
+
+    bnez s3, bf16_sqrt_return_a
+    beqz s1, bf16_sqrt_return_a
+    j bf16_sqrt_return_nan
+
+bf16_sqrt_check_zero:
+    or t0, s2, s3          # (exp || mant)
+    beqz t0, bf16_sqrt_return_zero
+    
+    beqz s1, bf16_sqrt_check_exp
+    j bf16_sqrt_return_nan
+
+bf16_sqrt_return_a:
+    mv a0, s0
+    j bf16_sqrt_exit
+
+bf16_sqrt_return_nan:
+    li a0, 0x7FC0
+    j bf16_sqrt_exit
+
+bf16_sqrt_return_zero:
+    li a0, 0
+    j bf16_sqrt_exit
+
+bf16_sqrt_check_exp:
+    beqz s2, bf16_sqrt_return_zero
+    
+    # t1 = new_exp
+    # t2 = new_mant
+    # t3 = (e = exp - 127)
+    addi t3, s2, -127
+
+    # s6 = (m = 0x80 | mant)
+    ori s6, s3, 0x80
+
+    # Check if e is odd
+    andi t0, t3, 1
+    beqz t0, bf16_sqrt_even_exp
+
+    # Odd exponent
+    slli s6, s6, 1
+    addi t0, t3, -1
+    srai t1, t0, 1          # Use arithmetic shift for signed division
+    addi t1, t1, 127
+    j bf16_sqrt_binary_search
+
+bf16_sqrt_even_exp:
+    srai t1, t3, 1          # Use arithmetic shift for signed division
+    addi t1, t1, 127
+
+bf16_sqrt_binary_search:
+    li s4, 90               # s4 = low
+    li s5, 256              # s5 = high
+    li t2, 128              # t2 = result (default) = new_mant
+
+bf16_sqrt_search_loop:
+    bgt s4, s5, bf16_sqrt_search_done
+
+    add t0, s4, s5
+    srli s7, t0, 1          # s7 = mid
+
+    # Manual multiplication using shift-and-add
+    mv t3, s7               # t3 = multiplicand (mid)
+    mv t4, s7               # t4 = multiplier (mid)
+    li t5, 0                # t5 = product
+    li t0, 8                # t0 = bit counter
+
+bf16_sqrt_mul_loop:
+    beqz t0, bf16_sqrt_mul_done
+
+    andi t6, t4, 1          # Use t6 for temporary bit check
+    beqz t6, bf16_sqrt_mul_skip
+    add t5, t5, t3
+
+bf16_sqrt_mul_skip:
+    slli t3, t3, 1
+    srli t4, t4, 1
+    addi t0, t0, -1
+    j bf16_sqrt_mul_loop
+
+bf16_sqrt_mul_done:
+    srli t5, t5, 7          # t5 = (sq = (mid * mid) / 128)
+
+    bgt t5, s6, bf16_sqrt_search_high  # Compare with m (s6)
+    mv t2, s7               # t2 = result = mid
+    addi s4, s7, 1          
+    j bf16_sqrt_search_loop
+
+bf16_sqrt_search_high:
+    addi s5, s7, -1         
+    j bf16_sqrt_search_loop
+
+bf16_sqrt_search_done:    
+    li t0, 256
+    blt t2, t0, bf16_sqrt_normalize
+    srli t2, t2, 1
+    addi t1, t1, 1
+    j bf16_sqrt_get_mant
+
+bf16_sqrt_normalize:
+    li t0, 128
+    blt t2, t0, bf16_sqrt_normalize_loop
+    j bf16_sqrt_get_mant
+
+bf16_sqrt_normalize_loop:
+    li t0, 128
+    bge t2, t0, bf16_sqrt_get_mant
+    li t0, 1
+    ble t1, t0, bf16_sqrt_get_mant
+    slli t2, t2, 1
+    addi t1, t1, -1
+    j bf16_sqrt_normalize_loop
+
+bf16_sqrt_get_mant:    
+    andi t2, t2, 0x7F
+    li t0, 0xFF
+    blt t1, t0, bf16_check_underflow
+    li t0, 0x7F80
+    mv a0, t0
+    j bf16_sqrt_exit
+
+bf16_check_underflow:
+    bgtz t1, bf16_sqrt_assemble
+    j bf16_sqrt_return_zero
+
+bf16_sqrt_assemble:
+    andi t1, t1, 0xFF
+    slli t1, t1, 7
+    or a0, t1, t2
+    j bf16_sqrt_exit
+    
+bf16_sqrt_exit:
     lw ra, 32(sp)
     lw s0, 28(sp)
     lw s1, 24(sp)
