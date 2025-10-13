@@ -46,6 +46,8 @@
     msg_sub_fail:     .string "  Arithmetic (sub) FAIL: case "        
     msg_mul_pass:     .string "  Arithmetic (mul): PASS\n"
     msg_mul_fail:     .string "  Arithmetic (mul) FAIL: case "
+    msg_div_pass:     .string "  Arithmetic (div): PASS\n"
+    msg_div_fail:     .string "  Arithmetic (div) FAIL: case "
     
     msg_expected:     .string ", expected 0x"
     msg_got:          .string ", got 0x"
@@ -190,6 +192,40 @@
         .half 0x0000        # padding
     
     mul_test_count: .word 5
+    
+    # Test data for division
+    div_test_cases:
+        # Test case 0: 10.0 / 2.0 = 5.0
+        .word 0x41200000    # a = 10.0f
+        .word 0x40000000    # b = 2.0f
+        .half 0x40A0        # expected result = 5.0 (bf16)
+        .half 0x0000        # padding
+        
+        # Test case 1: 6.0 / 3.0 = 2.0
+        .word 0x40C00000    # a = 6.0f
+        .word 0x40400000    # b = 3.0f
+        .half 0x4000        # expected result = 2.0
+        .half 0x0000        # padding
+        
+        # Test case 2: 1.0 / 2.0 = 0.5
+        .word 0x3F800000    # a = 1.0f
+        .word 0x40000000    # b = 2.0f
+        .half 0x3F00        # expected result = 0.5
+        .half 0x0000        # padding
+        
+        # Test case 3: -8.0 / 2.0 = -4.0
+        .word 0xC1000000    # a = -8.0f
+        .word 0x40000000    # b = 2.0f
+        .half 0xC080        # expected result = -4.0
+        .half 0x0000        # padding
+        
+        # Test case 4: 9.0 / -3.0 = -3.0
+        .word 0x41100000    # a = 9.0f
+        .word 0xC0400000    # b = -3.0f
+        .half 0xC040        # expected result = -3.0
+        .half 0x0000        # padding
+    
+    div_test_count: .word 5
 .text
 .globl main
 
@@ -899,15 +935,68 @@ test_arith_mul_fail:
     la a0, msg_newline
     call print_string
     addi s6, s6, 1
-    j test_arith_done
+    j test_arith_div_start
 
 test_arith_mul_done:
     la a0, msg_mul_pass
     call print_string
 
-    # TODO: test_arith_div_start
-    # TODO: test_arith_sqrt_start
+    # ===== Test DIV =====
+test_arith_div_start:
+    la s0, div_test_cases
+    lw s1, div_test_count
+    li s2, 0
     
+test_arith_div_loop:
+    bge s2, s1, test_arith_div_done
+    
+    lw s3, 0(s0)
+    lw s4, 4(s0)
+    lhu s5, 8(s0)
+    
+    mv a0, s3
+    call f32_to_bf16
+    mv t0, a0
+    
+    mv a0, s4
+    call f32_to_bf16
+    mv t1, a0
+    
+    mv a0, t0
+    mv a1, t1
+    call bf16_div
+    mv t2, a0
+    
+    bne t2, s5, test_arith_div_fail
+    
+    addi s0, s0, 12
+    addi s2, s2, 1
+    j test_arith_div_loop
+
+test_arith_div_fail:
+    la a0, msg_div_fail
+    call print_string
+    mv a0, s2
+    call print_decimal
+    la a0, msg_expected
+    call print_string
+    mv a0, s5
+    call print_hex16
+    la a0, msg_got
+    call print_string
+    mv a0, t2
+    call print_hex16
+    la a0, msg_newline
+    call print_string
+    addi s6, s6, 1
+    j test_arith_done
+
+test_arith_div_done:
+    la a0, msg_div_pass
+    call print_string
+
+    # TODO: test_arith_sqrt_start
+
 test_arith_done:
     # Return failure count (0 = all pass, >0 = some failed)
     mv a0, s6
@@ -1392,6 +1481,191 @@ bf16_mul_return_assemble:
     or a0, a0, t3           # mant
     
 bf16_mul_exit:
+    lw ra, 32(sp)
+    lw s0, 28(sp)
+    lw s1, 24(sp)
+    lw s2, 20(sp)
+    lw s3, 16(sp)
+    lw s4, 12(sp)
+    lw s5, 8(sp)
+    lw s6, 4(sp)
+    lw s7, 0(sp)
+    addi sp, sp, 36
+    ret
+
+# =====================================================
+# Function: bf16_div
+# Divide two bfloat16 values (a / b)
+# Input:  a0 = bf16 value a, a1 = bf16 value b
+# Output: a0 = bf16 result (a / b)
+# Registers used: s0-s7, t0-t6 (uses stack for saving s0-s7)
+# =====================================================
+bf16_div:
+    addi sp, sp, -36
+    sw ra, 32(sp)
+    sw s0, 28(sp)
+    sw s1, 24(sp)
+    sw s2, 20(sp)
+    sw s3, 16(sp)
+    sw s4, 12(sp)
+    sw s5, 8(sp)
+    sw s6, 4(sp)
+    sw s7, 0(sp)
+
+    mv s0, a0               # s0 = a
+    mv s1, a1               # s1 = b
+
+    # Extract fields
+    srli s2, s0, 15         # s2 = sign_a
+    andi s2, s2, 1
+    srli s3, s0, 7          # s3 = exp_a
+    andi s3, s3, 0xFF
+    andi s4, s0, 0x7F       # s4 = mant_a
+
+    srli s5, s1, 15         # s5 = sign_b
+    andi s5, s5, 1
+    srli s6, s1, 7          # s6 = exp_b
+    andi s6, s6, 0xFF
+    andi s7, s1, 0x7F       # s7 = mant_b
+    
+    # t1 = (result_sign = sign_a ^ sign_b)
+    xor t1, s2, s5
+    
+    li t0, 0xFF
+    beq s6, t0, bf16_div_check_b_mant
+    beq s3, t0, bf16_div_check_a_mant
+
+    or t0, s6, s7          # exp_b || mant_b
+    beqz t0, bf16_div_check_a    
+    or t0, s3, s4          # exp_a || mant_a
+    beqz t0, bf16_div_return_shift
+
+    beqz s3, bf16_div_check_exp_b
+    ori s4, s4, 0x80
+    j bf16_div_check_exp_b
+
+bf16_div_check_b_mant:
+    beqz s7, bf16_div_check_a_nan
+    mv a0, s1
+    j bf16_div_exit
+
+bf16_div_check_a_mant:
+    beqz s4, bf16_div_return_mask_sign
+    mv a0, s0
+    j bf16_div_exit
+
+bf16_div_check_a_nan:
+    li t0, 0xFF
+    bne s3, t0, bf16_div_return_shift
+    bnez s4, bf16_div_return_shift
+    li a0, 0x7FC0
+    j bf16_div_exit
+
+bf16_div_return_mask_sign:
+    slli t1, t1, 15
+    li t0, 0x7F80
+    or a0, t1, t0
+    j bf16_div_exit
+    
+bf16_div_return_shift:
+    slli a0, t1, 15
+    j bf16_div_exit
+
+bf16_div_check_a:
+    or t0, s3, s4          # exp_a || mant_a
+    beqz t0, bf16_div_return_mask_sign
+    li a0, 0x7FC0
+    j bf16_div_exit
+
+bf16_div_check_exp_b:
+    beqz s6, bf16_div_division
+    ori s7, s7, 0x80
+    
+bf16_div_division:
+    # t5 = (dividend = (uint32_t) mant_a << 15)
+    # t4 = (divisor = mant_b)
+    # t3 = (quotient = 0)
+    slli t5, s4, 15         
+    mv t4, s7               
+    li t3, 0                
+    
+    # for (int i = 0; i < 16; i++)
+    li t2, 16               # t2 = loop counter
+    
+bf16_div_loop:
+    beqz t2, bf16_div_exp_calc
+    
+    # quotient <<= 1
+    slli t3, t3, 1
+    
+    # Calculate: divisor << (15 - i)
+    li t0, 16
+    sub t6, t0, t2          # t6 = 16 - t2 = i
+    li t0, 15
+    sub t0, t0, t6          # t0 = 15 - i
+    sll t0, t4, t0          # t0 = divisor << (15 - i)
+
+    bltu t5, t0, bf16_div_loop_next
+    
+    sub t5, t5, t0
+    ori t3, t3, 1
+    
+bf16_div_loop_next:
+    addi t2, t2, -1
+    j bf16_div_loop
+    
+bf16_div_exp_calc:
+    # t2 = (result_exp = exp_a - exp_b + 127)
+    sub t2, s3, s6
+    addi t2, t2, 127
+    
+    bnez s3, bf16_div_exp_adjust_b
+    addi t2, t2, -1
+    
+bf16_div_exp_adjust_b:
+    bnez s6, bf16_div_normalize
+    addi t2, t2, 1
+    
+bf16_div_normalize:
+    li t0, 0x8000
+    and t0, t3, t0
+    beqz t0, bf16_div_normalize_loop
+    
+    srli t3, t3, 8
+    j bf16_div_mask_quotient
+    
+bf16_div_normalize_loop:
+    li t0, 0x8000
+    and t0, t3, t0
+    bnez t0, bf16_div_normalize_shift
+    
+    li t0, 1
+    ble t2, t0, bf16_div_normalize_shift
+    
+    slli t3, t3, 1
+    addi t2, t2, -1
+    j bf16_div_normalize_loop
+    
+bf16_div_normalize_shift:
+    srli t3, t3, 8
+    
+bf16_div_mask_quotient:
+    andi t3, t3, 0x7F
+    
+    li t0, 0xFF
+    bge t2, t0, bf16_div_return_mask_sign
+    blez t2, bf16_div_return_shift
+
+bf16_div_assemble:
+    # Assemble result
+    slli a0, t1, 15         # sign
+    andi t2, t2, 0xFF
+    slli t2, t2, 7
+    or a0, a0, t2           # exp
+    andi t3, t3, 0x7F
+    or a0, a0, t3           # mant
+    
+bf16_div_exit:
     lw ra, 32(sp)
     lw s0, 28(sp)
     lw s1, 24(sp)
